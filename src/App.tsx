@@ -16,11 +16,21 @@ interface Enemy {
 
 type Triplet = [x: number, y: number, z: number];
 
+
+//This can be used to batch all of the physics body updates in a single useframe call
 // const GameState = () => {
 //   const {world} = useRapier();
+//   const counter = useRef(0);
+//   const velocityLastUpdated = useRef(Date.now());
+
+
 //   useFrame(()=> {
+//     // if (Date.now() - velocityLastUpdated.current < 250) return;
+//     // velocityLastUpdated.current = Date.now();
+//     counter.current++
+//     const tempVector = new THREE.Vector3()
 //     world.forEachRigidBody(body=> {
-//       body.setLinvel(new THREE.Vector3(1,0,0), false)
+//       body.setLinvel(tempVector.set(0.01 * counter.current, 0, 0), false)
 //     })
 //   })
 
@@ -29,8 +39,6 @@ type Triplet = [x: number, y: number, z: number];
 
 interface EnemyRenderProps {
   enemy: Enemy;
-  // sameDirection: boolean;
-  velocityMagnitude: number;
   type: RigidBodyTypeString
 }
 
@@ -39,34 +47,28 @@ const enabledTranslations: [boolean, boolean, boolean] = [true, false, true];
 
 interface CalcVelocityProps {
   sameDirection: boolean;
-  velocityMagnitude: number;
   velocity: Triplet;
-}
-
-const calcVelocity: (props: CalcVelocityProps) => Triplet = ({ sameDirection, velocityMagnitude, velocity }) => {
-  return sameDirection ?
-    [velocityMagnitude, 0, 0] :
-    [velocity[0] * velocityMagnitude, 0, velocity[2] * velocityMagnitude]
 }
 
 const RenderEnemy: React.FC<EnemyRenderProps> = ({
   enemy,
-  // sameDirection,
-  // velocityMagnitude,
   type
 }) => {
   const bodyRef = useRef<RapierRigidBody>(null);
   const vectorRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
-  const enemyRef = useRef<Enemy>(enemy)
-  const counterRef = useRef(1);
+  const enemyRef = useRef<Enemy>({...enemy, velocity:[enemy.velocity[0] * 0.01, 0, enemy.velocity[2] * 0.01 ]})
+  const counterRef = useRef(0);
+  const velocityLastUpdated = useRef(Date.now());
 
   useFrame(() => {
+    if (Date.now() - velocityLastUpdated.current < 250) return;
+    velocityLastUpdated.current = Date.now();
     counterRef.current++
     bodyRef.current?.setLinvel(
       vectorRef.current.set(
-        enemyRef.current.velocity[0] * 0.0001 * counterRef.current,
+        enemyRef.current.velocity[0] * counterRef.current,
         0,
-        enemyRef.current.velocity[2] * 0.0001 * counterRef.current)
+        enemyRef.current.velocity[2] * counterRef.current)
       , true)
   })
 
@@ -96,9 +98,9 @@ function App() {
 
   const { xGravity } = useControls("Gravity", { xGravity: { value: 0, min: -20, max: 20, step: 1, label: "X Gravity" } })
   const { zGravity } = useControls("Gravity", { zGravity: { value: 0, min: -20, max: 20, step: 1, label: "Y Gravity" } })
-  const { velocityMagnitude } = useControls("Velocity", { velocityMagnitude: { value: 0, min: -20, max: 20, step: 1, label: "Magnitude" } })
-  const magnitudeRef = useRef(0);
-  const { sameDirection } = useControls("Velocity", { sameDirection: { value: true, label: "Same Direction?" } })
+  // const { velocityMagnitude } = useControls("Velocity", { velocityMagnitude: { value: 0, min: -20, max: 20, step: 1, label: "Magnitude" } })
+  // const magnitudeRef = useRef(0);
+  // const { sameDirection } = useControls("Velocity", { sameDirection: { value: true, label: "Same Direction?" } })
   const { type } = useControls({
     type: {
       options: ["dynamic", "static", "kinematicPosition", "kinematicVelocity"],
@@ -145,8 +147,6 @@ function App() {
         {enemies.map((enemy) => <RenderEnemy
           key={enemy.id}
           enemy={enemy}
-          // sameDirection={sameDirection}
-          // velocityMagnitude={velocityMagnitude}
           type={type as RigidBodyTypeString}
         />)}
       </Physics>
