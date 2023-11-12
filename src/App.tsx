@@ -1,12 +1,98 @@
-import { MutableRefObject, useMemo, useRef, useState } from 'react'
+import { MutableRefObject, createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera, Stats } from '@react-three/drei'
 import AxesHelperWithLabels from './components/AxesHelperWithLabels'
 import { useControls } from 'leva'
 import React from 'react'
-import { BallCollider, Physics, RapierRigidBody, RigidBody, RigidBodyTypeString, useRapier, vec3 } from '@react-three/rapier'
+import { BallCollider, Physics, RapierRigidBody, RigidBody, RigidBodyTypeString, useRapier} from '@react-three/rapier'
 import * as THREE from "three"
+import {World} from '@dimforge/rapier2d'
+
+interface RapierContext {
+  world: MutableRefObject<World | null>;
+}
+
+interface Physics2DProps {
+  gravity: THREE.Vector3;
+}
+
+const rapierContext = createContext<RapierContext | null>(null);
+
+const useRapier = () => {
+  const context = useContext(rapierContext);
+  if (context === null) {
+    throw new Error('useRapier must be used within a rapierContext.Provider');
+  }
+  return context;
+};
+
+const Physics2D: React.FC<Physics2DProps> = ({gravity}) => {
+  const world = useRef<World | null>(null);
+  const context = useMemo(() => ({
+    world
+  }), [])
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const initializeWorld = async () => {
+      const RAPIER = await import('@dimforge/rapier2d');
+      world.current = new RAPIER.World(gravity);
+      setIsReady(true); // Set isReady to true once the world is initialized
+    };
+
+    initializeWorld();
+  }, [])
+
+  useEffect(() => {
+    if (!world.current) return;
+    world.current.gravity = gravity;
+  }, [gravity]);
+
+  if (!isReady) {
+    return <div>Loading...</div>; // Render something while waiting for async operation
+  }
+
+  return (
+    <rapierContext.Provider value={context}>
+    {/* //   <FrameStepper
+    //     onStep={stepCallback}
+    //     type={updateLoop}
+    //     updatePriority={updatePriority}
+    //   />
+    //   {debug && <Debug />}
+    //   {children} */}
+    </rapierContext.Provider>
+  );
+}
+
+const Debug = memo(() => {
+  const { world } = useRapier();
+  const ref = useRef<THREE.LineSegments>(null);
+
+  useFrame(() => {
+    if (!world.current) return; 
+    const mesh = ref.current;
+    if (!mesh) return;
+
+    const buffers = world.current.debugRender();
+
+    mesh.geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(buffers.vertices, 3)
+    );
+    mesh.geometry.setAttribute("color", new THREE.BufferAttribute(buffers.colors, 4));
+  });
+
+  return (
+    <group>
+      <lineSegments ref={ref} frustumCulled={false}>
+        <lineBasicMaterial color={0xffffff} vertexColors />
+        <bufferGeometry />
+      </lineSegments>
+    </group>
+  );
+});
 
 interface Enemy {
   id: number;
