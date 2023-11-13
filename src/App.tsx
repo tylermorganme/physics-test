@@ -1,88 +1,151 @@
-import { MutableRefObject, createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import './App.css'
-import { Canvas, useFrame } from '@react-three/fiber'
-import { OrbitControls, PerspectiveCamera, Stats } from '@react-three/drei'
-import AxesHelperWithLabels from './components/AxesHelperWithLabels'
-import { useControls } from 'leva'
-import React from 'react'
-import { BallCollider, Physics, RapierRigidBody, RigidBody, RigidBodyTypeString, useRapier} from '@react-three/rapier'
-import * as THREE from "three"
-import {World} from '@dimforge/rapier2d'
+import {
+  Suspense,
+  createContext,
+  memo,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import "./App.css";
+import { Canvas, useFrame } from "@react-three/fiber";
+import {
+  OrbitControls,
+  PerspectiveCamera,
+  Sphere,
+  Stats,
+} from "@react-three/drei";
+import AxesHelperWithLabels from "./components/AxesHelperWithLabels";
+import { useControls } from "leva";
+import React from "react";
+import { RigidBodyTypeString } from "@react-three/rapier";
+import * as THREE from "three";
+import {
+  ColliderDesc,
+  RigidBody,
+  RigidBodyDesc,
+  World,
+} from "@dimforge/rapier2d";
+import { UPDATE_PRIORITY } from "./constant";
 
 interface RapierContext {
-  world: MutableRefObject<World | null>;
+  world: World | null;
+  rapierInitialized: boolean;
 }
 
 interface Physics2DProps {
-  gravity: THREE.Vector3;
+  gravity?: THREE.Vector2;
+  children: React.ReactNode;
+  debug?: boolean;
+  timeStep?: number;
+}
+
+interface Enemy {
+  id: number;
+  position: Duplet;
+  velocity: Duplet;
+}
+
+type Duplet = [x: number, y: number];
+
+interface EnemyRenderProps {
+  enemy: Enemy;
+  type: RigidBodyTypeString;
 }
 
 const rapierContext = createContext<RapierContext | null>(null);
 
-const useRapier = () => {
+const useRapier2D = () => {
   const context = useContext(rapierContext);
   if (context === null) {
-    throw new Error('useRapier must be used within a rapierContext.Provider');
+    throw new Error("useRapier must be used within a rapierContext.Provider");
+  }
+  if (!context.world) {
+    throw new Error("world cannot be undefined");
   }
   return context;
 };
 
-const Physics2D: React.FC<Physics2DProps> = ({gravity}) => {
+const Physics2D: React.FC<Physics2DProps> = ({
+  gravity = new THREE.Vector3(0, 0),
+  children,
+  debug = false,
+  timeStep = 1 / 60,
+}) => {
   const world = useRef<World | null>(null);
-  const context = useMemo(() => ({
-    world
-  }), [])
-  const [isReady, setIsReady] = useState(false);
+  const [rapierInitialized, setRapierInitialized] = useState(false);
+  const context = useMemo(
+    () => ({ world: world.current, rapierInitialized }),
+    [rapierInitialized]
+  );
 
   useEffect(() => {
     const initializeWorld = async () => {
-      const RAPIER = await import('@dimforge/rapier2d');
-      world.current = new RAPIER.World(gravity);
-      setIsReady(true); // Set isReady to true once the world is initialized
+      const RAPIER = await import("@dimforge/rapier2d");
+
+      const newWorld = new RAPIER.World(gravity);
+      newWorld.timestep = timeStep;
+      world.current = newWorld;
+      setRapierInitialized(true);
     };
 
     initializeWorld();
-  }, [])
+  }, []);
 
   useEffect(() => {
     if (!world.current) return;
     world.current.gravity = gravity;
   }, [gravity]);
 
-  if (!isReady) {
-    return <div>Loading...</div>; // Render something while waiting for async operation
-  }
-
-  return (
-    <rapierContext.Provider value={context}>
-    {/* //   <FrameStepper
-    //     onStep={stepCallback}
-    //     type={updateLoop}
-    //     updatePriority={updatePriority}
-    //   />
-    //   {debug && <Debug />}
-    //   {children} */}
-    </rapierContext.Provider>
-  );
-}
-
-const Debug = memo(() => {
-  const { world } = useRapier();
-  const ref = useRef<THREE.LineSegments>(null);
+  useEffect(() => {
+    if (!world.current) return;
+    world.current.timestep = timeStep;
+  }, [timeStep]);
 
   useFrame(() => {
-    if (!world.current) return; 
+    world?.current?.step();
+  }, UPDATE_PRIORITY.PHYSICS);
+
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      {rapierInitialized && (
+        <rapierContext.Provider value={context}>
+          {debug && <Debug />}
+          {children}
+        </rapierContext.Provider>
+      )}
+    </Suspense>
+  );
+};
+
+const Debug = memo(() => {
+  const { world } = useRapier2D();
+  const ref = useRef<THREE.LineSegments>(new THREE.LineSegments());
+
+  useFrame(() => {
+    if (!world) return;
     const mesh = ref.current;
     if (!mesh) return;
+    const buffers = world.debugRender();
 
-    const buffers = world.current.debugRender();
+    const vertices3D = new Float32Array((buffers.vertices.length / 2) * 3);
+    for (let i = 0, j = 0; i < buffers.vertices.length; i += 2, j += 3) {
+      vertices3D[j] = buffers.vertices[i];
+      vertices3D[j + 1] = buffers.vertices[i + 1];
+      vertices3D[j + 2] = 0;
+    }
 
     mesh.geometry.setAttribute(
       "position",
-      new THREE.BufferAttribute(buffers.vertices, 3)
+      new THREE.BufferAttribute(vertices3D, 3)
     );
-    mesh.geometry.setAttribute("color", new THREE.BufferAttribute(buffers.colors, 4));
-  });
+
+    mesh.geometry.setAttribute(
+      "color",
+      new THREE.BufferAttribute(buffers.colors, 4)
+    );
+  }, UPDATE_PRIORITY.PHYSICS_DEBUGGER);
 
   return (
     <group>
@@ -94,127 +157,121 @@ const Debug = memo(() => {
   );
 });
 
-interface Enemy {
-  id: number;
-  position: Triplet;
-  velocity: Triplet;
+interface UseRigidBodyProps {
+  initialPosition: Duplet;
 }
 
-type Triplet = [x: number, y: number, z: number];
+const useRigidBody = ({ initialPosition = [0, 0] }: UseRigidBodyProps) => {
+  const { world, rapierInitialized } = useRapier2D();
+  const rigidBodyHandle = useRef<number | null>(null);
+  const rigidBodyRef = useRef<RigidBody | null>(null);
+  const colliderHandles = useRef<number[]>([]);
+  // Change this ref to need something that has an interface that allow the
+  // position to be changed.
+  const threeRef = useRef<THREE.Group<THREE.Object3DEventMap>>(null);
+  useEffect(() => {
+    if (!rapierInitialized || !world) return;
+    const rbDesc = RigidBodyDesc.dynamic()
+      .setTranslation(...initialPosition)
+      .setCanSleep(false)
+      .lockRotations();
+    const rb = world.createRigidBody(rbDesc);
+    rigidBodyRef.current = rb;
+    const colliderDesc = ColliderDesc.ball(1);
+    const collider = world.createCollider(colliderDesc, rb);
+    //Grab a reference to the collider;
+    colliderHandles.current = [collider.handle];
+    rigidBodyHandle.current = rb.handle;
+  }, [rapierInitialized]);
 
+  //TODO: Add logic to keep THREE component in sync with physics body;
+  useFrame(() => {
+    if (rigidBodyRef.current && threeRef.current) {
+      const rigidBodyTranslation = { ...rigidBodyRef.current.translation() };
+      threeRef.current.position.set(
+        rigidBodyTranslation.x,
+        rigidBodyTranslation.y,
+        0
+      );
+    }
+  }, UPDATE_PRIORITY.RENDER);
 
-//This can be used to batch all of the physics body updates in a single useframe call
-// const GameState = () => {
-//   const {world} = useRapier();
-//   const counter = useRef(0);
-//   const velocityLastUpdated = useRef(Date.now());
+  useEffect(() => {
+    return () => {
+      if (!world) return;
+      for (let colliderHandle of colliderHandles.current) {
+        world.removeCollider(world.getCollider(colliderHandle), false);
+      }
+      if (rigidBodyHandle.current) {
+        world.removeRigidBody(world.getRigidBody(rigidBodyHandle.current));
+      }
+    };
+  }, [rapierInitialized]);
 
+  return { threeRef, rigidBodyRef };
+};
 
-//   useFrame(()=> {
-//     // if (Date.now() - velocityLastUpdated.current < 250) return;
-//     // velocityLastUpdated.current = Date.now();
-//     counter.current++
-//     const tempVector = new THREE.Vector3()
-//     world.forEachRigidBody(body=> {
-//       body.setLinvel(tempVector.set(0.01 * counter.current, 0, 0), false)
-//     })
-//   })
-
-//   return null
-// }
-
-interface EnemyRenderProps {
-  enemy: Enemy;
-  type: RigidBodyTypeString
-}
-
-
-const enabledTranslations: [boolean, boolean, boolean] = [true, false, true];
-
-interface CalcVelocityProps {
-  sameDirection: boolean;
-  velocity: Triplet;
-}
-
-const RenderEnemy: React.FC<EnemyRenderProps> = ({
-  enemy,
-  type
-}) => {
-  const bodyRef = useRef<RapierRigidBody>(null);
-  const vectorRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
-  const enemyRef = useRef<Enemy>({...enemy, velocity:[enemy.velocity[0] * 0.01, 0, enemy.velocity[2] * 0.01 ]})
+const RenderEnemy: React.FC<EnemyRenderProps> = ({ enemy }) => {
   const counterRef = useRef(0);
-  const velocityLastUpdated = useRef(Date.now());
+  const { threeRef, rigidBodyRef } = useRigidBody({
+    initialPosition: enemy.position,
+  });
+  const direction = useMemo(
+    () => ({ x: (1 - Math.random() * 2) * 0.01, y: (1 - Math.random() * 2) * 0.01, }), []
+  );
 
   useFrame(() => {
-    if (Date.now() - velocityLastUpdated.current < 250) return;
-    velocityLastUpdated.current = Date.now();
-    counterRef.current++
-    bodyRef.current?.setLinvel(
-      vectorRef.current.set(
-        enemyRef.current.velocity[0] * counterRef.current,
-        0,
-        enemyRef.current.velocity[2] * counterRef.current)
-      , true)
-  })
+    counterRef.current++;
+    const { x, y } = direction;
+    rigidBodyRef.current?.setLinvel(
+      { x: x * counterRef.current, y: y * counterRef.current },
+      true
+    );
+    counterRef.current++;
+  });
 
-
-  return (
-    <RigidBody
-      ref={bodyRef}
-      position={enemyRef.current.position}
-      canSleep={false}
-      lockRotations={true}
-      enabledTranslations={enabledTranslations}
-      type={type as RigidBodyTypeString}
-    >
-      <BallCollider
-        args={[0.25]}
-      />
-    </RigidBody>
-  )
-}
-
+  return <group ref={threeRef}>{/* <Sphere args={[0.5]}/> */}</group>;
+};
 
 function App() {
   const [enemies, setEnemies] = useState<Enemy[]>([]);
-  const { physicsDebug } = useControls({ physicsDebug: { value: true, label: "Physics Debug" } })
-  const { colliderCount } = useControls("Colliders", { colliderCount: { value: 500, min: 0, max: 3000, step: 100, label: "Count" } })
-  const { spawnScale } = useControls("Colliders", { spawnScale: { value: 10, min: 0, max: 100, step: 100, label: "Spawn Scale" } })
+  const { physicsDebug } = useControls({
+    physicsDebug: { value: true, label: "Physics Debug" },
+  });
+  const { colliderCount } = useControls("Colliders", {
+    colliderCount: { value: 100, min: 0, max: 6000, step: 100, label: "Count" },
+  });
+  const { spawnScale } = useControls("Colliders", {
+    spawnScale: {
+      value: 10,
+      min: 0,
+      max: 100,
+      step: 10,
+      label: "Spawn Scale",
+    },
+  });
 
-  const { xGravity } = useControls("Gravity", { xGravity: { value: 0, min: -20, max: 20, step: 1, label: "X Gravity" } })
-  const { zGravity } = useControls("Gravity", { zGravity: { value: 0, min: -20, max: 20, step: 1, label: "Y Gravity" } })
-  // const { velocityMagnitude } = useControls("Velocity", { velocityMagnitude: { value: 0, min: -20, max: 20, step: 1, label: "Magnitude" } })
-  // const magnitudeRef = useRef(0);
-  // const { sameDirection } = useControls("Velocity", { sameDirection: { value: true, label: "Same Direction?" } })
   const { type } = useControls({
     type: {
       options: ["dynamic", "static", "kinematicPosition", "kinematicVelocity"],
-      label: "Rigid Body Type"
-    }
-  })
-  const { velocityIterations } = useControls('Iterations', {
-    velocityIterations: { value: 4, min: 1, max: 4, step: 1, label: "Velocity" }
-  })
-  const { velocityFrictionIterations } = useControls('Iterations', {
-    velocityFrictionIterations: { value: 8, min: 1, max: 8, step: 1, label: "Friction" }
-  })
-  const { stabilizationIterations } = useControls('Iterations', {
-    stabilizationIterations: { value: 1, min: 1, max: 2, step: 1, label: "Stabilization" }
-  })
+      label: "Rigid Body Type",
+    },
+  });
 
   React.useEffect(() => {
-    const newEnemies: Enemy[] = []
+    const newEnemies: Enemy[] = [];
     for (let i = 0; i < colliderCount; i++) {
       newEnemies.push({
         id: i,
-        position: [(-1 + Math.random() * 2) * spawnScale, 0, (-1 + Math.random() * 2) * spawnScale],
-        velocity: [-1 + Math.random() * 2, 0, -1 + Math.random() * 2]
-      })
-
+        position: [
+          (-1 + Math.random() * 2) * spawnScale,
+          (-1 + Math.random() * 2) * spawnScale,
+        ],
+        velocity: [-1 + Math.random() * 2, -1 + Math.random() * 2],
+      });
     }
-    setEnemies(newEnemies)
-  }, [colliderCount, spawnScale])
+    setEnemies(newEnemies);
+  }, [colliderCount, spawnScale]);
 
   return (
     <Canvas>
@@ -222,23 +279,18 @@ function App() {
       <PerspectiveCamera />
       <Stats />
       <AxesHelperWithLabels />
-      <Physics
-        debug={physicsDebug}
-        gravity={[xGravity, 0, zGravity]}
-        maxVelocityIterations={velocityIterations}
-        maxVelocityFrictionIterations={velocityFrictionIterations}
-        maxStabilizationIterations={stabilizationIterations}
-      >
+      <Physics2D debug={physicsDebug}>
         {/* <GameState/> */}
-        {enemies.map((enemy) => <RenderEnemy
-          key={enemy.id}
-          enemy={enemy}
-          type={type as RigidBodyTypeString}
-        />)}
-      </Physics>
-
+        {enemies.map((enemy) => (
+          <RenderEnemy
+            key={enemy.id}
+            enemy={enemy}
+            type={type as RigidBodyTypeString}
+          />
+        ))}
+      </Physics2D>
     </Canvas>
-  )
+  );
 }
 
-export default App
+export default App;
